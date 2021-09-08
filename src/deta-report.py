@@ -1,4 +1,4 @@
-#!/usr/csite/pubtools/bin/python3.7
+#!/usr/csite/pubtools/bin/python3.6
 
 import epics
 import numpy as np
