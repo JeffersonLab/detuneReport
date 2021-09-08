@@ -251,37 +251,41 @@ def main():
 
     cavities = [f"R15{c}" for c in range(1,9)]
 
-    # TODO: Convert this to using executor.submit to leverage the futures
-    # interface
-    with concurrent.futures.ProcessPoolExecutor(max_workers=4) as executor:
-        results = executor.map(run_cavity_job, cavities, timeout=120)
-
+    # Setup the email message
     fromaddr = 'adamc@jlab.org'
     toaddrs = ['adamc@jlab.org']
-
     email = EmailMessage(subject="Detune Error Report", fromaddr=fromaddr,
                          toaddrs=toaddrs)
 
-    for result in results:
+    with concurrent.futures.ProcessPoolExecutor(max_workers=4) as executor:
+        # Use submit to leverage Future interface.  Creates a dictionary
+        # of Future objects mapped to cavity epics names.
+        futures = {}
+        for cavity in cavities:
+            futures[executor.submit(run_cavity_job, cavity,
+                    timeout=120)] = cavity
+
+    for future in concurrent.futures.as_completed(futures):
+    #for result in results:
         try:
+            result = future.result()
+        except Exception as exc:
+            email.add_cavity_results(epics_name=futures[future], d_min="",
+                                     coefs="", img=None, 
+                                     error=f"{repr(exc)}")
+        else:
             d_min = result[0]
             coefs = result[1]
             img = result[2]
             epics_name = result[3]
-            
             email.add_cavity_results(epics_name=epics_name, d_min=d_min,
                                      coefs=coefs, img=img)
-
             #print(f"Cavity: {epics_name}")
             #print(f"Min CRRP DETA2 value: {d_min}")
             #print(f"Coeficients: {coefs}")
             #print(f"Img: {im}")
             # plt.imshow(mpimg.imread(img))
             # plt.show()
-        except Exception as exc:
-            email.add_cavity_results(epics_name="", d_min="", coefs="",
-                                     img=None, error=f"{type(exc)}: {exc}")
-            print("{exc.args}")
 
     email.send_html_email()
 
