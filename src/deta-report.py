@@ -23,6 +23,41 @@ import smtplib
 import imghdr
 
 
+class CavityResults:
+    """A class for holding the results of analyzing a cavity.  Just a light wrapper."""
+
+    def __init__(self, epics_name):
+        self.epics_name = epics_name
+        self.tdoff = None
+        self.tdoff_errors = []
+        self.coefs = []
+        self.img_bufs = []
+        self.error_messages = []
+
+    def append_result(self, tdoff_error, coefs, img_buf, error_message):
+        self.tdoff_errors.append(tdoff_error)
+        self.coefs.append(coefs)
+        self.img_bufs.append(img_buf)
+        self.error_messages.append(error_message)
+
+class ResultSet:
+
+    def __init__(self):
+        # Data Structures keyed on epic_name
+        self.epics_names = []
+        self.tdoff_errors = {}
+        self.coefs = {}
+        self.imgs = {}
+        self.errors = {}
+
+    def add_cavity_results(self, cavity_results: CavityResults):
+        self.epics_names.append(cavity_results.epics_name)
+        self.tdoff_errors[cavity_results.epics_name] = cavity_results.tdoff_errors
+        self.coefs[cavity_results.epics_name] = cavity_results.coefs
+        self.imgs[cavity_results.epics_name] = cavity_results.img_bufs
+        self.errors[cavity_results.epics_name] = cavity_results.error_messages
+
+
 class EmailMessage:
 
     def __init__(self, subject, fromaddr, toaddrs, smtp_server='localhost'):
@@ -31,13 +66,6 @@ class EmailMessage:
         self.toaddrs = toaddrs
         self.smtp_server = smtp_server
         self.message = None
-
-        # Data Structures keyed on epic_name
-        self.epics_names = []
-        self.tdoff_errors = {}
-        self.coefs = {}
-        self.imgs = {}
-        self.errors = {}
          
 
     def init_message(self):
@@ -83,53 +111,46 @@ th {
     def finalize_message(self):
         self.message += """</body></html>"""
 
-    def add_cavity_results(self, epics_name, tdoff_error, coefs, img, error=""):
-        self.epics_names.append(epics_name)
-        self.tdoff_errors[epics_name] = tdoff_error
-        self.coefs[epics_name] = coefs
-        self.imgs[epics_name] = img
-        self.errors[epics_name] = error
-
-    def generate_message(self):
+    def generate_message(self, rs: ResultSet):
         # Setup the header, etc.
         self.init_message()
 
+        
         # Add the summary section/table
         self.message += "<h1>Result Summary</h1>\n"
-        self.message += "<table><tr><th>Cavity</th><th>Min Deta2</th>"
-        self.message += "<th>Fit Coefs</th>"
+        self.message += "<table><tr><th>Cavity</th><th>TDOFF Error Mean (degs)</th>"
+        self.message += "<th>TDOFF Error Std Dev</th>"
         self.message += "<th>Error Message</th></tr>\n"
-        for name in sorted(self.epics_names):
-            tdoff_error = self.tdoff_errors[name]
-            coefs = self.coefs[name]
-            err = self.errors[name]
-            self.message += f"<tr><td>{name}</td><td>{tdoff_error}</td>"
-            self.message += f"<td>{list(coefs)}</td>"
+        for name in sorted(rs.epics_names):
+            tdoff_error = rs.tdoff_errors[name]
+            coefs = rs.coefs[name]
+            err = rs.errors[name]
+            self.message += f"<tr><td>{name}</td><td>{np.mean(tdoff_error)}</td>"
+            self.message += f"<td>{np.std(tdoff_error)}</td>"
             self.message += f"<td>{err}</td></tr>\n"
         self.message += f"</table>"
 
         # Include the plots in the message.
         self.message += "<h1>Plots</h1>"
-        for name in sorted(self.epics_names):
+        for name in sorted(rs.epics_names):
             self.message += f"<h2>{name}</h2>"
-            cav_imgs = self.imgs[name]
-            if cav_imgs is None:
-                self.message += f"<p>{name} experienced an error.</p>"
-                self.message += f"<p>{self.errors[name]}</p>\n"
-            else:
-                for img_buf in cav_imgs:
+            cav_imgs = rs.imgs[name]
+            for img_buf in cav_imgs:
+                if img_buf is None:
+                    self.message += f"<p>{name} experienced an error.</p>"
+                    self.message += f"<p>{rs.errors[name]}</p>\n"
+                else:
                     string = base64.b64encode(img_buf.read()).decode()
                     uri = 'data:image/png;base64,' + string
-                    #uri = 'data:image/png;base64,' + urllib.parse.quote(string)
                     self.message += f'<img width="400" heigh="200" src="{uri}"/>\n'
-
+    
                     # Put the cursor back at the start so they can be attachments.
                     img_buf.seek(0)
         
         self.finalize_message()
 
-    def send_html_email(self):
-        self.generate_message()
+    def send_html_email(self, rs: ResultSet):
+        self.generate_message(rs=rs)
 
         msg = MIMEMultipart('mixed')
         msg['Subject'] = self.subject
@@ -138,20 +159,21 @@ th {
 
         part1 = MIMEText(self.message, 'html')
         msg.attach(part1)
-        if self.imgs is not None:
-            for epics_name in self.imgs.keys():
-                if self.imgs[epics_name] is not None:
-                    for img_buf in self.imgs[epics_name]:
-                        att = email.mime.image.MIMEImage(img_buf.read(),
-                                                         _subtype='png')
-                        att.add_header('Content-Disposition', 'attachment',
-                                       filename=f"{epics_name}.png")
-                        msg.attach(att)
+        if rs.imgs is not None:
+            for epics_name in sorted(rs.imgs.keys()):
+                if rs.imgs[epics_name] is not None:
+                    for img_buf in rs.imgs[epics_name]:
+                        if img_buf is not None:
+                            att = email.mime.image.MIMEImage(img_buf.read(),
+                                                             _subtype='png')
+                            att.add_header('Content-Disposition', 'attachment',
+                                           filename=f"{epics_name}.png")
+                            msg.attach(att)
 
         with smtplib.SMTP(self.smtp_server) as server:
             server.sendmail(msg['From'], self.toaddrs, msg.as_string())
 
-
+    
 
 def is_gradient_ramping(epics_name):
     # If the cavity is ramping is saved as the 11th bit in the
@@ -228,10 +250,7 @@ def get_plot_img(deta, crfp, coef, tdoff_error, epics_name, time_string):
 def run_cavity_job(epics_name, n_samples, timeout=30.0):
 
     # Setup for storing multiple samples' results
-    tdoff_errors = []
-    coefs = []
-    img_bufs = []
-    errors = []
+    cavity_results = CavityResults(epics_name=epics_name)
 
     for i in range(n_samples):
         # Wait until there is no trip
@@ -257,29 +276,24 @@ def run_cavity_job(epics_name, n_samples, timeout=30.0):
             tdoff_error = math.nan
 
         # Save a plot of the data and the fit
-        im = get_plot_img(deta, crfp, coef, tdoff_error, epics_name, time_string)
+        img_buf = get_plot_img(deta, crfp, coef, tdoff_error, epics_name, time_string)
 
         # Collect the results
-        tdoff_errors.append(tdoff_error)
-        coefs.append(coef)
-        img_bufs.append(im)
-        errors.append(error)
+        cavity_results.append_result(tdoff_error, coef, img_buf, error)
 
+        # TODO: Update based on scope delay or sample rate or something.
         # Sleep so new data has time to accrue
-        time.sleep(2)
+        if i < n_samples - 1:
+            time.sleep(2)
 
-    return (tdoff_errors, coefs, img_bufs, errors)
+    return cavity_results
+    #return (tdoff_errors, coefs, img_bufs, errors)
 
 
 def main():
 
     cavities = [f"R15{c}" for c in range(1,9)]
-
-    # Setup the email message
-    fromaddr = 'adamc@jlab.org'
-    toaddrs = ['adamc@jlab.org']
-    email = EmailMessage(subject="Detune Error Report", fromaddr=fromaddr,
-                         toaddrs=toaddrs)
+    rs = ResultSet()
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=4) as executor:
         # Use submit to leverage Future interface.  Creates a dictionary
@@ -291,18 +305,12 @@ def main():
 
     for future in concurrent.futures.as_completed(futures):
         try:
-            result = future.result()
+            results = future.result()
         except Exception as exc:
-            email.add_cavity_results(epics_name=futures[future], tdoff_error="",
-                                     coefs="", img=None, 
-                                     error=f"{repr(exc)}")
-        else:
-            epics_name = futures[future]
-            tdoff_error = result[0]
-            coefs = result[1]
-            img = result[2]
-            email.add_cavity_results(epics_name=epics_name, tdoff_error=tdoff_error,
-                                     coefs=coefs, img=img)
+            results = CavityResults(epics_name=futures[future])
+            results.append_result(tdoff_error=math.nan,
+                                  coefs=np.array([math.nan, math.nan, math.nan]),
+                                  img_buf=None, error_message=f"{repr(exc)}")
             #print(f"Cavity: {epics_name}")
             #print(f"Min CRFP DETA2 value: {tdoff_error}")
             #print(f"Coeficients: {coefs}")
@@ -310,7 +318,14 @@ def main():
             # plt.imshow(mpimg.imread(img))
             # plt.show()
 
-    email.send_html_email()
+        rs.add_cavity_results(results)
+
+    # Setup the email message
+    fromaddr = 'adamc@jlab.org'
+    toaddrs = ['adamc@jlab.org']
+    email = EmailMessage(subject="Detune Error Report", fromaddr=fromaddr,
+                         toaddrs=toaddrs)
+    email.send_html_email(rs=rs)
 
 if __name__ == "__main__":
     main()
