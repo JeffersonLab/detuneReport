@@ -111,18 +111,19 @@ th {
         self.message += "<h1>Plots</h1>"
         for name in sorted(self.epics_names):
             self.message += f"<h2>{name}</h2>"
-            img = self.imgs[name]
-            if img is None:
+            cav_imgs = self.imgs[name]
+            if cav_imgs is None:
                 self.message += f"<p>{name} experienced an error.</p>"
                 self.message += f"<p>{self.errors[name]}</p>\n"
             else:
-                string = base64.b64encode(img.read()).decode()
-                uri = 'data:image/png;base64,' + string
-                #uri = 'data:image/png;base64,' + urllib.parse.quote(string)
-                self.message += f'<img src="{uri}"/>\n'
+                for img_buf in cav_imgs:
+                    string = base64.b64encode(img_buf.read()).decode()
+                    uri = 'data:image/png;base64,' + string
+                    #uri = 'data:image/png;base64,' + urllib.parse.quote(string)
+                    self.message += f'<img width="400" heigh="200" src="{uri}"/>\n'
 
-                # Put the cursor back at the start so they can be attachments.
-                img.seek(0)
+                    # Put the cursor back at the start so they can be attachments.
+                    img_buf.seek(0)
         
         self.finalize_message()
 
@@ -137,13 +138,14 @@ th {
         part1 = MIMEText(self.message, 'html')
         msg.attach(part1)
         if self.imgs is not None:
-            for filename in self.imgs.keys():
-                if self.imgs[filename] is not None:
-                    att = email.mime.image.MIMEImage(self.imgs[filename].read(),
-                                                     _subtype='png')
-                    att.add_header('Content-Disposition', 'attachment',
-                                   filename=f"{filename}.png")
-                    msg.attach(att)
+            for epics_name in self.imgs.keys():
+                if self.imgs[epics_name] is not None:
+                    for img_buf in self.imgs[epics_name]:
+                        att = email.mime.image.MIMEImage(img_buf.read(),
+                                                         _subtype='png')
+                        att.add_header('Content-Disposition', 'attachment',
+                                       filename=f"{epics_name}.png")
+                        msg.attach(att)
 
         with smtplib.SMTP(self.smtp_server) as server:
             server.sendmail(msg['From'], self.toaddrs, msg.as_string())
@@ -218,33 +220,49 @@ def get_plot_img(deta, crrp, coef, epics_name, time_string):
     return buf
 
 
-def run_cavity_job(epics_name, timeout=30.0):
+def run_cavity_job(epics_name, n_samples, timeout=30.0):
 
-    # Wait until there is no trip
-    while not is_stable_running(epics_name):
-        time.sleep(1)
+    # Setup for storing multiple samples' results
+    d_mins = []
+    coefs = []
+    img_bufs = []
+    errors = []
 
-    # Get the detune angle and reflected power waveforms
-    deta = epics.caget(f"{epics_name}WFSDETA2")
-    crrp = epics.caget(f"{epics_name}WFSCRRP")
-    time_string = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-5]
+    for i in range(n_samples):
+        # Wait until there is no trip
+        while not is_stable_running(epics_name):
+            time.sleep(1)
 
-    # Calculate the second order fit of these
-    coef = np.polynomial.polynomial.polyfit(deta, crrp, deg=2)
+        # Get the detune angle and reflected power waveforms
+        deta = epics.caget(f"{epics_name}WFSDETA2")
+        crrp = epics.caget(f"{epics_name}WFSCRRP")
+        time_string = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-5]
+
+        # Calculate the second order fit of these
+        coef = np.polynomial.polynomial.polyfit(deta, crrp, deg=2)
     
-    # Find the argmin of CRRP - i.e., the detune angle producing the lowest
-    # reflected power.  Take the derivative, set it to zero, solve for deta.
-    # Easy for crrp = c0 + c1*d + c2*^2.
-    #d_min = -coef[1] / (2 * coef[2])
-    d_min = get_quadratic_min(coef)
+        # Find the argmin of CRRP - i.e., the detune angle producing the lowest
+        # reflected power.
+        try:
+            error = ""
+            d_min = get_quadratic_min(coef)
+        except Exception as exc:
+            d_min = ""
+            error = repr(exc)
 
-    # Print out the parameter estimates, and detune angle producing the minimum
-    # reflected power.
+        # Save a plot of the data and the fit
+        im = get_plot_img(deta, crrp, coef, epics_name, time_string)
 
-    # Save a plot of the data and the fit
-    im = get_plot_img(deta, crrp, coef, epics_name, time_string)
+        # Collect the results
+        d_mins.append(d_min)
+        coefs.append(coef)
+        img_bufs.append(im)
+        errors.append(error)
 
-    return (d_min, coef, im, epics_name)
+        # Sleep so new data has time to accrue
+        time.sleep(2)
+
+    return (d_mins, coefs, img_bufs, errors)
 
 
 def main():
@@ -262,11 +280,10 @@ def main():
         # of Future objects mapped to cavity epics names.
         futures = {}
         for cavity in cavities:
-            futures[executor.submit(run_cavity_job, cavity,
+            futures[executor.submit(run_cavity_job, cavity, n_samples=2,
                     timeout=120)] = cavity
 
     for future in concurrent.futures.as_completed(futures):
-    #for result in results:
         try:
             result = future.result()
         except Exception as exc:
@@ -274,10 +291,10 @@ def main():
                                      coefs="", img=None, 
                                      error=f"{repr(exc)}")
         else:
+            epics_name = futures[future]
             d_min = result[0]
             coefs = result[1]
             img = result[2]
-            epics_name = result[3]
             email.add_cavity_results(epics_name=epics_name, d_min=d_min,
                                      coefs=coefs, img=img)
             #print(f"Cavity: {epics_name}")
