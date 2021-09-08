@@ -114,8 +114,10 @@ th {
     def generate_message(self, rs: ResultSet):
         # Setup the header, etc.
         self.init_message()
-
         
+        # TODO: Add column for count of "good" non-nan samples
+        # TODO: Add new TDOFF value
+        # TODO: Format error messages better
         # Add the summary section/table
         self.message += "<h1>Result Summary</h1>\n"
         self.message += "<table><tr><th>Cavity</th><th>TDOFF Error Mean (degs)</th>"
@@ -125,8 +127,8 @@ th {
             tdoff_error = rs.tdoff_errors[name]
             coefs = rs.coefs[name]
             err = rs.errors[name]
-            self.message += f"<tr><td>{name}</td><td>{np.mean(tdoff_error)}</td>"
-            self.message += f"<td>{np.std(tdoff_error)}</td>"
+            self.message += f"<tr><td>{name}</td><td>{round(np.nanmean(tdoff_error), 2)}</td>"
+            self.message += f"<td>{round(np.nanstd(tdoff_error), 2)}</td>"
             self.message += f"<td>{err}</td></tr>\n"
         self.message += f"</table>"
 
@@ -233,7 +235,7 @@ def get_plot_img(deta, crfp, coef, tdoff_error, epics_name, time_string):
              ha="center")
 
     c = np.round(coef, 5).astype('str')
-    coef_str = f"CRFP = {c[0]} + {c[1]}*d + {c[2]}*d^2"
+    coef_str = f"CRFP = {c[0]} + {c[1]}*tan(d) + {c[2]}*tan(d)^2"
     title = f"{epics_name} ({time_string})\n{coef_str}"
     plt.title(title)
     plt.ylabel("CRFP")
@@ -252,8 +254,10 @@ def run_cavity_job(epics_name, n_samples, timeout=30.0):
     # Setup for storing multiple samples' results
     cavity_results = CavityResults(epics_name=epics_name)
 
+    # TODO: Update procedure based on Rama's guidance
     for i in range(n_samples):
         # Wait until there is no trip
+        # TODO: Add timeout back in
         while not is_stable_running(epics_name):
             time.sleep(1)
 
@@ -292,6 +296,7 @@ def run_cavity_job(epics_name, n_samples, timeout=30.0):
 
 def main():
 
+    # TODO: add argparse
     cavities = [f"R15{c}" for c in range(1,9)]
     rs = ResultSet()
 
