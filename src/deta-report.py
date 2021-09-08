@@ -1,5 +1,6 @@
 #!/usr/csite/pubtools/bin/python3.6
 
+import math
 import epics
 import numpy as np
 import matplotlib.pyplot as plt
@@ -33,7 +34,7 @@ class EmailMessage:
 
         # Data Structures keyed on epic_name
         self.epics_names = []
-        self.d_mins = {}
+        self.tdoff_errors = {}
         self.coefs = {}
         self.imgs = {}
         self.errors = {}
@@ -82,9 +83,9 @@ th {
     def finalize_message(self):
         self.message += """</body></html>"""
 
-    def add_cavity_results(self, epics_name, d_min, coefs, img, error=""):
+    def add_cavity_results(self, epics_name, tdoff_error, coefs, img, error=""):
         self.epics_names.append(epics_name)
-        self.d_mins[epics_name] = d_min
+        self.tdoff_errors[epics_name] = tdoff_error
         self.coefs[epics_name] = coefs
         self.imgs[epics_name] = img
         self.errors[epics_name] = error
@@ -99,10 +100,10 @@ th {
         self.message += "<th>Fit Coefs</th>"
         self.message += "<th>Error Message</th></tr>\n"
         for name in sorted(self.epics_names):
-            d_min = self.d_mins[name]
+            tdoff_error = self.tdoff_errors[name]
             coefs = self.coefs[name]
             err = self.errors[name]
-            self.message += f"<tr><td>{name}</td><td>{d_min}</td>"
+            self.message += f"<tr><td>{name}</td><td>{tdoff_error}</td>"
             self.message += f"<td>{list(coefs)}</td>"
             self.message += f"<td>{err}</td></tr>\n"
         self.message += f"</table>"
@@ -183,33 +184,37 @@ def get_quadratic_min(coefs):
 
 
 
-def get_plot_img(deta, crrp, coef, epics_name, time_string):
+def get_plot_img(deta, crfp, coef, tdoff_error, epics_name, time_string):
     """Generates a plot and returns it as a buffer variable."""
 
     # Create a figure for the plot
     fig = plt.figure(figsize=(6,4))
 
     # Plot the data
-    plt.scatter(deta, crrp, color='blue', alpha=0.5, s=2)
+    plt.scatter(deta, crfp, color='blue', alpha=0.5, s=2)
 
     # Plot the fit and min point
-    x = np.linspace(np.min(deta), np.max(deta), 100)
+    plot_x = np.linspace(np.min(deta), np.max(deta), 100)
+    x = np.tan(np.radians(plot_x))
     y = coef[0] + coef[1] * x + coef[2] * np.power(x,2)
-    plt.plot(x, y, 'r')
+    plt.plot(plot_x, y, 'r')
 
     # Plot the min point
-    d_min = get_quadratic_min(coef)
-    ymin = np.min(crrp) - (np.max(crrp) - np.min(crrp))/2
+    ymin = np.min(crfp) - (np.max(crfp) - np.min(crfp))/2
     x_center = np.min(deta) + (np.max(deta) - np.min(deta))/2
-    plt.vlines(d_min, ymin=ymin, ymax=np.max(crrp), zorder=3)
-    plt.text(x_center, ymin, f"min CRRP @\ndeta = {round(d_min,2)}",
+    if math.isnan(tdoff_error):
+        plt.text(x_center, ymin, f"min CRFP @\ndeta = {tdoff_error}",
+             ha="center")
+    else:
+        plt.vlines(tdoff_error, ymin=ymin, ymax=np.max(crfp), zorder=3)
+        plt.text(x_center, ymin, f"min CRFP @\ndeta = {round(tdoff_error,2)}",
              ha="center")
 
     c = np.round(coef, 5).astype('str')
-    coef_str = f"CRRP = {c[0]} + {c[1]}*d + {c[2]}*d^2"
+    coef_str = f"CRFP = {c[0]} + {c[1]}*d + {c[2]}*d^2"
     title = f"{epics_name} ({time_string})\n{coef_str}"
     plt.title(title)
-    plt.ylabel("CRRP")
+    plt.ylabel("CRFP")
     plt.xlabel("DETA2")
 
     # Write the plot out as an image file in a buffer variable
@@ -223,7 +228,7 @@ def get_plot_img(deta, crrp, coef, epics_name, time_string):
 def run_cavity_job(epics_name, n_samples, timeout=30.0):
 
     # Setup for storing multiple samples' results
-    d_mins = []
+    tdoff_errors = []
     coefs = []
     img_bufs = []
     errors = []
@@ -235,26 +240,27 @@ def run_cavity_job(epics_name, n_samples, timeout=30.0):
 
         # Get the detune angle and reflected power waveforms
         deta = epics.caget(f"{epics_name}WFSDETA2")
-        crrp = epics.caget(f"{epics_name}WFSCRRP")
+        crfp = epics.caget(f"{epics_name}WFSCRFP")
         time_string = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-5]
 
         # Calculate the second order fit of these
-        coef = np.polynomial.polynomial.polyfit(deta, crrp, deg=2)
+        X = np.tan(np.radians(deta))
+        coef = np.polynomial.polynomial.polyfit(X, crfp, deg=2)
     
-        # Find the argmin of CRRP - i.e., the detune angle producing the lowest
+        # Find the argmin of CRFP - i.e., the detune angle producing the lowest
         # reflected power.
         try:
             error = ""
-            d_min = get_quadratic_min(coef)
+            tdoff_error = np.degrees(np.arctan(get_quadratic_min(coef)))
         except Exception as exc:
-            d_min = ""
             error = repr(exc)
+            tdoff_error = math.nan
 
         # Save a plot of the data and the fit
-        im = get_plot_img(deta, crrp, coef, epics_name, time_string)
+        im = get_plot_img(deta, crfp, coef, tdoff_error, epics_name, time_string)
 
         # Collect the results
-        d_mins.append(d_min)
+        tdoff_errors.append(tdoff_error)
         coefs.append(coef)
         img_bufs.append(im)
         errors.append(error)
@@ -262,7 +268,7 @@ def run_cavity_job(epics_name, n_samples, timeout=30.0):
         # Sleep so new data has time to accrue
         time.sleep(2)
 
-    return (d_mins, coefs, img_bufs, errors)
+    return (tdoff_errors, coefs, img_bufs, errors)
 
 
 def main():
@@ -287,18 +293,18 @@ def main():
         try:
             result = future.result()
         except Exception as exc:
-            email.add_cavity_results(epics_name=futures[future], d_min="",
+            email.add_cavity_results(epics_name=futures[future], tdoff_error="",
                                      coefs="", img=None, 
                                      error=f"{repr(exc)}")
         else:
             epics_name = futures[future]
-            d_min = result[0]
+            tdoff_error = result[0]
             coefs = result[1]
             img = result[2]
-            email.add_cavity_results(epics_name=epics_name, d_min=d_min,
+            email.add_cavity_results(epics_name=epics_name, tdoff_error=tdoff_error,
                                      coefs=coefs, img=img)
             #print(f"Cavity: {epics_name}")
-            #print(f"Min CRRP DETA2 value: {d_min}")
+            #print(f"Min CRFP DETA2 value: {tdoff_error}")
             #print(f"Coeficients: {coefs}")
             #print(f"Img: {im}")
             # plt.imshow(mpimg.imread(img))
