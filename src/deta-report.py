@@ -10,6 +10,7 @@ import time
 from datetime import datetime
 import urllib
 import base64
+import argparse
 import concurrent.futures
 
 from email.message import EmailMessage
@@ -56,6 +57,18 @@ class ResultSet:
         self.coefs[cavity_results.epics_name] = cavity_results.coefs
         self.imgs[cavity_results.epics_name] = cavity_results.img_bufs
         self.errors[cavity_results.epics_name] = cavity_results.error_messages
+
+    def to_table_string(self):
+        """Return a table formatted human readable string."""
+        t_fmt = "{:<10} {:<13} {:<13} {}\n"
+
+        out = t_fmt.format("Cavity", "TDOFF_Err_Avg", "TDOFF_Err_Std", "Error_Msgs")
+        for name in self.epics_names:
+            avg = round(np.nanmean(self.tdoff_errors[name]), 3)
+            std = round(np.nanstd(self.tdoff_errors[name]), 3)
+            out += t_fmt.format(name, avg, std, self.errors[name])
+            
+        return out
 
 
 class EmailMessage:
@@ -248,7 +261,7 @@ def get_plot_img(deta, crfp, coef, tdoff_error, epics_name, time_string):
     return buf
 
 
-def run_cavity_job(epics_name, n_samples, timeout=20.0):
+def run_cavity_job(epics_name, n_samples, timeout):
 
     # Setup for storing multiple samples' results
     cavity_results = CavityResults(epics_name=epics_name)
@@ -304,21 +317,17 @@ def run_cavity_job(epics_name, n_samples, timeout=20.0):
     return cavity_results
 
 
-def main():
-
-    # TODO: add argparse
-#    parser = argparse.ArguemtnParser(description="Calculate the detune offset error of a"
-#                                                 " 12 GeV zone or cavity using waveforms")
-#    group = parser.add_mutually_es
-    cavities = [f"R15{c}" for c in range(1,9)]
+def process_cavities(cavities, n_samples, timeout):
+    """Run tdoffset analysis for the specified cavities."""
     rs = ResultSet()
 
-    with concurrent.futures.ProcessPoolExecutor(max_workers=4) as executor:
+    with concurrent.futures.ProcessPoolExecutor(max_workers=8) as executor:
         # Use submit to leverage Future interface.  Creates a dictionary
         # of Future objects mapped to cavity epics names.
         futures = {}
         for cavity in cavities:
-            futures[executor.submit(run_cavity_job, cavity, n_samples=2)] = cavity
+            futures[executor.submit(run_cavity_job, cavity, n_samples=n_samples,
+                                    timeout=timeout)] = cavity
 
     for future in concurrent.futures.as_completed(futures):
         try:
@@ -338,12 +347,49 @@ def main():
 
         rs.add_cavity_results(results)
 
-    # Setup the email message
-    fromaddr = 'adamc@jlab.org'
-    toaddrs = ['adamc@jlab.org']
-    email = EmailMessage(subject="Detune Error Report", fromaddr=fromaddr,
-                         toaddrs=toaddrs)
-    email.send_html_email(rs=rs)
+    return rs
+
+
+def main():
+
+    # Setup parser.  You can target either a cavity or a zone.  Secondary check is
+    # required to make sure that the user hasn't blocked all output of results.
+    parser = argparse.ArgumentParser(description="Calculate the detune offset error of a"
+                                                 " 12 GeV zone or cavity using waveforms")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("-z", "--zone", type=str, nargs=1,
+                       help="EPICS name of a zone to check.  E.g. R1M")
+    group.add_argument("-c", "--cavity", type=str, nargs=1,
+                       help="EPICS name of cavity to check.  E.g., R1M1")
+    parser.add_argument("-e", "--email", type=str, nargs='+',
+                        help="Space separated list of email addresses to report")
+    parser.add_argument("-q", "--quiet", action='store_true', help="Suppresses text output")
+    parser.add_argument("-n", "--n-samples", type=int, nargs=1, default=1,
+                        help="Number of samples to collect per cavity")
+    parser.add_argument("-t", "--timeout", type=float, nargs=1, default=20,
+                        help="How long each sample should wait for stable operations.")
+
+    args = parser.parse_args()
+   
+    # Make sure the user has specified some form of output
+    if (args.email is None) and (args.quiet):
+        print("Error: User selection of quiet and no emails will produce no output.")
+        exit(1)
+
+    if args.cavity is not None:
+        cavities = args.cavity
+    elif args.zone is not None:
+        cavities = [f"{args.zone[0]}{i}" for i in range(1, 9)]
+
+    # Go get the data and analyze it
+    result_set = process_cavities(cavities, n_samples=args.n_samples[0], timeout=args.timeout)
+
+    if args.email is not None:
+        email = EmailMessage(subject="Detune Error Report", fromaddr=os.getlogin(),
+                             toaddrs=args.email)
+        email.send_html_email(rs=result_set)
+    if not args.quiet:
+       print(result_set.to_table_string()) 
 
 if __name__ == "__main__":
     main()
