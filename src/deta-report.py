@@ -60,13 +60,15 @@ class ResultSet:
 
     def to_table_string(self):
         """Return a table formatted human readable string."""
-        t_fmt = "{:<10} {:<13} {:<13} {}\n"
+        t_fmt = "{:<7} {:<13} {:<13} {:<10} {}\n"
 
-        out = t_fmt.format("Cavity", "TDOFF_Err_Avg", "TDOFF_Err_Std", "Error_Msgs")
-        for name in self.epics_names:
+        out = t_fmt.format("Cavity", "TDOFF_Err_Avg", "TDOFF_Err_Std", "N_Success",
+                           "Error_Msgs")
+        for name in sorted(self.epics_names):
             avg = round(np.nanmean(self.tdoff_errors[name]), 3)
             std = round(np.nanstd(self.tdoff_errors[name]), 3)
-            out += t_fmt.format(name, avg, std, self.errors[name])
+            n_suc = np.count_nonzero(~np.isnan(self.tdoff_errors[name]))
+            out += t_fmt.format(name, avg, std, n_suc, self.errors[name])
             
         return out
 
