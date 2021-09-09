@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 import io
 import time
-import datetime
+from datetime import datetime
 import urllib
 import base64
 import concurrent.futures
@@ -207,7 +207,6 @@ def get_quadratic_min(coefs):
     return -coefs[1] / (2 * coefs[2])
 
 
-
 def get_plot_img(deta, crfp, coef, tdoff_error, epics_name, time_string):
     """Generates a plot and returns it as a buffer variable."""
 
@@ -249,39 +248,51 @@ def get_plot_img(deta, crfp, coef, tdoff_error, epics_name, time_string):
     return buf
 
 
-def run_cavity_job(epics_name, n_samples, timeout=30.0):
+def run_cavity_job(epics_name, n_samples, timeout=20.0):
 
     # Setup for storing multiple samples' results
     cavity_results = CavityResults(epics_name=epics_name)
 
     # TODO: Update procedure based on Rama's guidance
     for i in range(n_samples):
-        # Wait until there is no trip
-        # TODO: Add timeout back in
-        while not is_stable_running(epics_name):
-            time.sleep(1)
-
-        # Get the detune angle and reflected power waveforms
-        deta = epics.caget(f"{epics_name}WFSDETA2")
-        crfp = epics.caget(f"{epics_name}WFSCRFP")
-        time_string = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-5]
-
-        # Calculate the second order fit of these
-        X = np.tan(np.radians(deta))
-        coef = np.polynomial.polynomial.polyfit(X, crfp, deg=2)
-    
-        # Find the argmin of CRFP - i.e., the detune angle producing the lowest
-        # reflected power.
         try:
-            error = ""
-            tdoff_error = np.degrees(np.arctan(get_quadratic_min(coef)))
-        except Exception as exc:
-            error = repr(exc)
+            # Intialize the values in case of exception
             tdoff_error = math.nan
+            coef = []
+            img_buf = None
+            error = ""
 
-        # Save a plot of the data and the fit
-        img_buf = get_plot_img(deta, crfp, coef, tdoff_error, epics_name, time_string)
+            # Wait until there is no trip
+            start = datetime.now()
+            while not is_stable_running(epics_name):
+                time.sleep(1)
+                if (datetime.now() - start).total_seconds() > timeout:
+                    raise RuntimeError(f"{epics_name}: {start.strftime('%Y-%m-%d %H:%M:%S')} "
+                                       "sample timed out waiting for stable running")
 
+            # Get the detune angle and reflected power waveforms
+            deta = epics.caget(f"{epics_name}WFSDETA2")
+            crfp = epics.caget(f"{epics_name}WFSCRFP")
+            time_string = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-5]
+
+            # Calculate the second order fit of these
+            X = np.tan(np.radians(deta))
+            coef = np.polynomial.polynomial.polyfit(X, crfp, deg=2)
+    
+            # Find the argmin of CRFP - i.e., the detune angle producing the lowest
+            # reflected power.
+            try:
+                tdoff_error = np.degrees(np.arctan(get_quadratic_min(coef)))
+            except Exception as exc:
+                error += repr(exc)
+                tdoff_error = math.nan
+
+            # Save a plot of the data and the fit
+            img_buf = get_plot_img(deta, crfp, coef, tdoff_error, epics_name, time_string)
+
+        except Exception as exc:
+            error += repr(exc)
+        
         # Collect the results
         cavity_results.append_result(tdoff_error, coef, img_buf, error)
 
@@ -291,12 +302,14 @@ def run_cavity_job(epics_name, n_samples, timeout=30.0):
             time.sleep(2)
 
     return cavity_results
-    #return (tdoff_errors, coefs, img_bufs, errors)
 
 
 def main():
 
     # TODO: add argparse
+#    parser = argparse.ArguemtnParser(description="Calculate the detune offset error of a"
+#                                                 " 12 GeV zone or cavity using waveforms")
+#    group = parser.add_mutually_es
     cavities = [f"R15{c}" for c in range(1,9)]
     rs = ResultSet()
 
@@ -305,13 +318,13 @@ def main():
         # of Future objects mapped to cavity epics names.
         futures = {}
         for cavity in cavities:
-            futures[executor.submit(run_cavity_job, cavity, n_samples=2,
-                    timeout=120)] = cavity
+            futures[executor.submit(run_cavity_job, cavity, n_samples=2)] = cavity
 
     for future in concurrent.futures.as_completed(futures):
         try:
             results = future.result()
         except Exception as exc:
+            print(repr(exc))
             results = CavityResults(epics_name=futures[future])
             results.append_result(tdoff_error=math.nan,
                                   coefs=np.array([math.nan, math.nan, math.nan]),
