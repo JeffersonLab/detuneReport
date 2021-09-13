@@ -181,17 +181,6 @@ th {
         # Add the summary section/table
         self.message += "<h1>Result Summary</h1>\n"
         self.message += rs.to_html_table_string()
-#        self.message += "<table><tr><th>Cavity</th><th>TDOFF Error Mean (degs)</th>"
-#        self.message += "<th>TDOFF Error Std Dev</th>"
-#        self.message += "<th>Error Message</th></tr>\n"
-#        for name in sorted(rs.epics_names):
-#            tdoff_error = rs.tdoff_errors[name]
-#            coefs = rs.coefs[name]
-#            err = rs.errors[name]
-#            self.message += f"<tr><td>{name}</td><td>{round(np.nanmean(tdoff_error), 2)}</td>"
-#            self.message += f"<td>{round(np.nanstd(tdoff_error), 2)}</td>"
-#            self.message += f"<td>{err}</td></tr>\n"
-#        self.message += f"</table>"
 
         # Include the plots in the message.
         self.message += "<h1>Plots</h1>"
