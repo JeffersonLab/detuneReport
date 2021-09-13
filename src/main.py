@@ -4,6 +4,7 @@ import numpy as np
 import argparse
 import concurrent.futures
 
+from _version import __version__
 from analysis import run_cavity_job
 from email_sender import EmailSender
 from results import CavityResults, ResultSet, ResultTextFormatter
@@ -38,7 +39,7 @@ def process_cavities(cavities, n_samples, timeout):
 def main():
     # Setup parser.  You can target either a cavity or a zone.  Secondary check is
     # required to make sure that the user hasn't blocked all output of results.
-    parser = argparse.ArgumentParser(prog="detuneReport",
+    parser = argparse.ArgumentParser(prog=f"detuneReport",
                                      description="Calculate the detune offset error of a 12 GeV zone or cavity using "
                                                  "waveforms")
     group = parser.add_mutually_exclusive_group(required=True)
@@ -53,6 +54,7 @@ def main():
                         help="Number of samples to collect per cavity")
     parser.add_argument("-t", "--timeout", type=float, nargs=1, default=20,
                         help="How long each sample should wait for stable operations.")
+    parser.add_argument("-v", "--version", action='version', version='%(prog)s ' + __version__)
 
     args = parser.parse_args()
 
