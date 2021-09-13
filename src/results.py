@@ -71,8 +71,9 @@ class ResultSet:
         no_errors = True
         for name in sorted(self.epics_names):
             for rn, error in enumerate(self.errors[name]):
-                e_out += t_fmt.format(name, rn + 1, error)
-                no_errors = False
+                if error != "":
+                    e_out += t_fmt.format(name, rn + 1, error)
+                    no_errors = False
 
         if no_errors:
             out += "\nNo Errors"
@@ -110,8 +111,9 @@ class ResultSet:
         no_errors = True
         for name in sorted(self.epics_names):
             for rn, error in enumerate(self.errors[name]):
-                e_out += r_fmt.format(name, rn + 1, error)
-                no_errors = False
+                if error != "":
+                    e_out += r_fmt.format(name, rn + 1, error)
+                    no_errors = False
 
         e_out += "</table>\n"
 
