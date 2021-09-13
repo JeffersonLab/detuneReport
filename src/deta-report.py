@@ -77,11 +77,19 @@ class ResultSet:
             tdoff_new = round(self.tdoffs[name] + avg, 3)
             out += t_fmt.format(name, tdoff_new, tdoff, avg, std, n_suc)
 
-        t_fmt = "{:<7} {}\n"
-        out += "\n" + t_fmt.format("Cavity", "Error_Message")
+        t_fmt = "{:<7} {:<5}  {}\n"
+        e_out = "\n" + t_fmt.format("Cavity", "Run#", "Error_Message")
+        no_errors = True
         for name in sorted(self.epics_names):
-            out += t_fmt.format(name, self.errors[name])
+            for rn, error in enumerate(self.errors[name]): 
+                e_out += t_fmt.format(name, rn+1, error)
+                no_errors = False
             
+        if no_errors:
+            out += "\nNo Errors"
+        else:
+            out += e_out
+
         return out
 
     def to_html_table_string(self):
@@ -106,14 +114,22 @@ class ResultSet:
             out += r_fmt.format(name, tdoff_new, tdoff, avg, std, n_suc)
 
         # Setup the second table for error messages
-        out += "</table><br><table>"
-        h_fmt = "<tr><th>{:<7}</th><th>{}</th></tr>"
-        r_fmt = "<tr><td>{:<7}</td><td>{}</td></tr>"
-        out += "\n" + h_fmt.format("Cavity", "Error_Message")
+        e_out = "</table><br><table>"
+        h_fmt = "<tr><th>{:<7}</th><th>{:<5}</th><th>{}</th></tr>"
+        r_fmt = "<tr><td>{:<7}</td><th>{:<5}</th><td>{}</td></tr>"
+        e_out += "\n" + h_fmt.format("Cavity", "Run#", "Error_Message")
+        no_errors = True
         for name in sorted(self.epics_names):
-            out += r_fmt.format(name, self.errors[name])
+            for rn, error in enumerate(self.errors[name]):
+                e_out += r_fmt.format(name, rn+1, error)
+                no_errors = False
 
-        out += "</table>"
+        e_out += "</table>\n"
+
+        if no_errors:
+            out += "<p><strong>No Errors</strong></p>\n"
+        else:
+            out += e_out
             
         return out
 
@@ -175,10 +191,6 @@ th {
         # Setup the header, etc.
         self.init_message()
         
-        # TODO: Add column for count of "good" non-nan samples
-        # TODO: Add new TDOFF value
-        # TODO: Format error messages better
-        # Add the summary section/table
         self.message += "<h1>Result Summary</h1>\n"
         self.message += rs.to_html_table_string()
 
@@ -428,7 +440,8 @@ def main():
         cavities = [f"{args.zone[0]}{i}" for i in range(1, 9)]
 
     # Go get the data and analyze it
-    result_set = process_cavities(cavities, n_samples=args.n_samples[0], timeout=args.timeout)
+    result_set = process_cavities(cavities, n_samples=args.n_samples[0],
+                                  timeout=args.timeout[0])
 
     if args.email is not None:
         email = EmailMessage(subject="Detune Error Report", fromaddr=os.getlogin(),
