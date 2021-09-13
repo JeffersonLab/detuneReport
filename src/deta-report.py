@@ -1,5 +1,6 @@
 #!/usr/csite/pubtools/bin/python3.6
 
+import os
 import math
 import epics
 import numpy as np
@@ -27,9 +28,9 @@ import imghdr
 class CavityResults:
     """A class for holding the results of analyzing a cavity.  Just a light wrapper."""
 
-    def __init__(self, epics_name):
+    def __init__(self, epics_name, tdoff):
         self.epics_name = epics_name
-        self.tdoff = None
+        self.tdoff = tdoff
         self.tdoff_errors = []
         self.coefs = []
         self.img_bufs = []
@@ -46,29 +47,73 @@ class ResultSet:
     def __init__(self):
         # Data Structures keyed on epic_name
         self.epics_names = []
+        self.tdoffs = {}
         self.tdoff_errors = {}
         self.coefs = {}
         self.imgs = {}
         self.errors = {}
 
     def add_cavity_results(self, cavity_results: CavityResults):
-        self.epics_names.append(cavity_results.epics_name)
-        self.tdoff_errors[cavity_results.epics_name] = cavity_results.tdoff_errors
-        self.coefs[cavity_results.epics_name] = cavity_results.coefs
-        self.imgs[cavity_results.epics_name] = cavity_results.img_bufs
-        self.errors[cavity_results.epics_name] = cavity_results.error_messages
+        name = cavity_results.epics_name
+        self.epics_names.append(name)
+        self.tdoffs[name] = cavity_results.tdoff
+        self.tdoff_errors[name] = cavity_results.tdoff_errors
+        self.coefs[name] = cavity_results.coefs
+        self.imgs[name] = cavity_results.img_bufs
+        self.errors[name] = cavity_results.error_messages
 
     def to_table_string(self):
         """Return a table formatted human readable string."""
-        t_fmt = "{:<7} {:<13} {:<13} {:<10} {}\n"
+        t_fmt = "{:<7} {:>10} {:>10} {:>13} {:>13} {:>10}\n"
 
-        out = t_fmt.format("Cavity", "TDOFF_Err_Avg", "TDOFF_Err_Std", "N_Success",
-                           "Error_Msgs")
+        out = t_fmt.format("Cavity", "TDOFF_New", "TDOFF_Cur", "TDOFF_Err_Avg",
+                           "TDOFF_Err_Std", "N_Good")
         for name in sorted(self.epics_names):
             avg = round(np.nanmean(self.tdoff_errors[name]), 3)
             std = round(np.nanstd(self.tdoff_errors[name]), 3)
             n_suc = np.count_nonzero(~np.isnan(self.tdoff_errors[name]))
-            out += t_fmt.format(name, avg, std, n_suc, self.errors[name])
+
+            tdoff = round(self.tdoffs[name], 3)
+            tdoff_new = round(self.tdoffs[name] + avg, 3)
+            out += t_fmt.format(name, tdoff_new, tdoff, avg, std, n_suc)
+
+        t_fmt = "{:<7} {}\n"
+        out += "\n" + t_fmt.format("Cavity", "Error_Message")
+        for name in sorted(self.epics_names):
+            out += t_fmt.format(name, self.errors[name])
+            
+        return out
+
+    def to_html_table_string(self):
+        """Return a html table of the data."""
+
+        out = "<table>"
+        h_fmt = "<tr><th>{:<7}</th><th>{:>10}</th><th>{:>10}</th><th>{:>13}</th>"
+        h_fmt += "<th>{:>13}</th><th>{:>10}</th></tr>\n"
+        r_fmt = "<tr><td>{:<7}</td><td>{:>10}</td><td>{:>10}</td><td>{:>13}</td>"
+        r_fmt += "<td>{:>13}</td><td>{:>10}</td></tr>\n"
+
+        # Set up the first summary table
+        out += h_fmt.format("Cavity", "TDOFF_New", "TDOFF_Cur", "TDOFF_Err_Avg",
+                           "TDOFF_Err_Std", "N_Good")
+        for name in sorted(self.epics_names):
+            avg = round(np.nanmean(self.tdoff_errors[name]), 3)
+            std = round(np.nanstd(self.tdoff_errors[name]), 3)
+            n_suc = np.count_nonzero(~np.isnan(self.tdoff_errors[name]))
+
+            tdoff = round(self.tdoffs[name], 3)
+            tdoff_new = round(self.tdoffs[name] + avg, 3)
+            out += r_fmt.format(name, tdoff_new, tdoff, avg, std, n_suc)
+
+        # Setup the second table for error messages
+        out += "</table><br><table>"
+        h_fmt = "<tr><th>{:<7}</th><th>{}</th></tr>"
+        r_fmt = "<tr><td>{:<7}</td><td>{}</td></tr>"
+        out += "\n" + h_fmt.format("Cavity", "Error_Message")
+        for name in sorted(self.epics_names):
+            out += r_fmt.format(name, self.errors[name])
+
+        out += "</table>"
             
         return out
 
@@ -135,17 +180,18 @@ th {
         # TODO: Format error messages better
         # Add the summary section/table
         self.message += "<h1>Result Summary</h1>\n"
-        self.message += "<table><tr><th>Cavity</th><th>TDOFF Error Mean (degs)</th>"
-        self.message += "<th>TDOFF Error Std Dev</th>"
-        self.message += "<th>Error Message</th></tr>\n"
-        for name in sorted(rs.epics_names):
-            tdoff_error = rs.tdoff_errors[name]
-            coefs = rs.coefs[name]
-            err = rs.errors[name]
-            self.message += f"<tr><td>{name}</td><td>{round(np.nanmean(tdoff_error), 2)}</td>"
-            self.message += f"<td>{round(np.nanstd(tdoff_error), 2)}</td>"
-            self.message += f"<td>{err}</td></tr>\n"
-        self.message += f"</table>"
+        self.message += rs.to_html_table_string()
+#        self.message += "<table><tr><th>Cavity</th><th>TDOFF Error Mean (degs)</th>"
+#        self.message += "<th>TDOFF Error Std Dev</th>"
+#        self.message += "<th>Error Message</th></tr>\n"
+#        for name in sorted(rs.epics_names):
+#            tdoff_error = rs.tdoff_errors[name]
+#            coefs = rs.coefs[name]
+#            err = rs.errors[name]
+#            self.message += f"<tr><td>{name}</td><td>{round(np.nanmean(tdoff_error), 2)}</td>"
+#            self.message += f"<td>{round(np.nanstd(tdoff_error), 2)}</td>"
+#            self.message += f"<td>{err}</td></tr>\n"
+#        self.message += f"</table>"
 
         # Include the plots in the message.
         self.message += "<h1>Plots</h1>"
@@ -262,11 +308,15 @@ def get_plot_img(deta, crfp, coef, tdoff_error, epics_name, time_string):
     plt.close()
     return buf
 
+def get_tdoff(epics_name):
+    tdoff = epics.caget(f"{epics_name}TDOFF")
+    return tdoff
 
 def run_cavity_job(epics_name, n_samples, timeout):
 
     # Setup for storing multiple samples' results
-    cavity_results = CavityResults(epics_name=epics_name)
+    tdoff = get_tdoff(epics_name)
+    cavity_results = CavityResults(epics_name=epics_name, tdoff=tdoff)
 
     # TODO: Update procedure based on Rama's guidance
     for i in range(n_samples):
@@ -289,6 +339,11 @@ def run_cavity_job(epics_name, n_samples, timeout):
             deta = epics.caget(f"{epics_name}WFSDETA2")
             crfp = epics.caget(f"{epics_name}WFSCRFP")
             time_string = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-5]
+
+            # Check again.  If we're not still in stable operations, then we probably have
+            # a problem in the data just collected.
+            if not is_stable_running(epics_name):
+                raise RuntimeException("Trip occurred during data collection")
 
             # Calculate the second order fit of these
             X = np.tan(np.radians(deta))
