@@ -1,0 +1,11 @@
+#!/bin/env bash
+
+# Get the directory containing this script
+APP_DIR="$( cd "$( dirname "$(readlink -f "${BASH_SOURCE[0]}/..")" )" >/dev/null 2>&1 && pwd )"
+
+# Make sure our package search path is right
+export PATH="/usr/csite/pubtools/python/3.6.9/bin:$PATH"
+export PYTHONPATH="${APP_DIR}/src/:${PYTHONPATH}"
+
+# Run the app passing along all of the args
+python3 ${APP_DIR}/src/main.py "$@"
