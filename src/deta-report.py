@@ -212,14 +212,16 @@ th {
             cav_imgs = rs.imgs[name]
             for run_num, img_buf in enumerate(cav_imgs):
                 if img_buf is None:
-                    self.message += f"<p>{name} run {run_num+1} experienced an error.</p>"
+                    self.message += f"<br><p>{name} run {run_num+1} experienced"
+                    self.message += f" an error.</p>"
                     self.message += f"<p>{rs.errors[name][run_num]}</p>\n"
                 else:
                     string = base64.b64encode(img_buf.read()).decode()
                     uri = 'data:image/png;base64,' + string
-                    self.message += f'<img width="400" heigh="200" src="{uri}"/>\n'
+                    self.message += f'<img width="400" heigh="200" '
+                    self.message += f'src="{uri}"/>\n'
     
-                    # Put the cursor back at the start so they can be attachments.
+                    # Put the cursor back at start so they can be attachments.
                     img_buf.seek(0)
         
         self.finalize_message()
@@ -248,28 +250,73 @@ th {
         with smtplib.SMTP(self.smtp_server) as server:
             server.sendmail(msg['From'], self.toaddrs, msg.as_string())
 
-    
+class Cavity:
 
-def is_gradient_ramping(epics_name):
-    # If the cavity is ramping is saved as the 11th bit in the
-    # R...STAT1 PV
-    stat1 = epics.caget(f"{epics_name}STAT1")
+    def __init__(self, epics_name):
+        self.epics_name = epics_name
+        self.rf_on = epics.PV(f"{epics_name}RFONr")
+        self.stat1 = epics.PV(f"{epics_name}STAT1")
+        self.tdoff = epics.PV(f"{epics_name}TDOFF")
+        self.deta2 = epics.PV(f"{epics_name}WFSDETA2", auto_monitor=False)
+        self.crfp = epics.PV(f"{epics_name}WFSCRFP", auto_monitor=False)
 
-    # We're ramping if the bit is not 0
-    is_ramping = int(stat1) & 0x0800 > 0
+        self.pvs = []
+        self.pvs.append(self.rf_on)
+        self.pvs.append(self.stat1)
+        self.pvs.append(self.tdoff)
+        self.pvs.append(self.deta2)
+        self.pvs.append(self.crfp)
 
-    return(is_ramping)
+        for pv in self.pvs:
+            if not pv.wait_for_connection(timeout=2):
+                raise RuntimeError(f"Could not connect to PV '{pv.pvname}'")
 
+    def is_gradient_ramping(self):
+        """Check if the cavity is currently ramping gradient."""
+        # If the cavity is ramping is saved as the 11th bit in the
+        # R...STAT1 PV
+        value = self.stat1.value
 
-def is_rf_on(epics_name):
-    rf_on = epics.caget(f"{epics_name}RFONr")
-    is_on = rf_on == 1
-    return is_on
+        if value is None:
+            raise RuntimeError(f"Error retreiving PV '{self.stat1.pvname}'")
 
+        # We're ramping if the bit is not 0
+        is_ramping = int(value) & 0x0800 > 0
 
-def is_stable_running(epics_name):
-    is_stable = (not is_gradient_ramping(epics_name)) and is_rf_on(epics_name)
-    return is_stable
+        return is_ramping
+
+    def is_rf_on(self):
+        """Check if the cavity currently has RF on."""
+        value = self.rf_on.value
+
+        if value is None:
+            raise RuntimeError(f"Error retreiving PV '{self.rf_on.pvname}'")
+
+        is_on = value == 1
+        return is_on
+
+    def is_stable_running(self):
+        not_ramping= not self.is_gradient_ramping()
+        rf_on = self.is_rf_on()
+        is_stable = not_ramping and rf_on
+        return is_stable
+
+    def get_waveforms(self):
+        deta2 = self.deta2.get(use_monitor=False)
+        crfp = self.crfp.get(use_monitor=False)
+        if deta2 is None:
+            raise RuntimeError("Error getting DETA2 waveform")
+        if crfp is None:
+            raise RuntimeError("Error getting CRFP waveform")
+
+        return (deta2, crfp)
+
+    def get_tdoff(self):
+        value = self.tdoff.value
+        if value is None:
+            raise RuntimeError(f"Error retreiving PV '{self.rf_on.pvname}'")
+
+        return value
 
 
 def get_quadratic_min(coefs):
@@ -320,14 +367,14 @@ def get_plot_img(deta, crfp, coef, tdoff_error, epics_name, time_string):
     plt.close()
     return buf
 
-def get_tdoff(epics_name):
-    tdoff = epics.caget(f"{epics_name}TDOFF")
-    return tdoff
 
 def run_cavity_job(epics_name, n_samples, timeout):
 
+    # Create a cavity object for interacting with this cavity
+    cavity = Cavity(epics_name=epics_name)
+
     # Setup for storing multiple samples' results
-    tdoff = get_tdoff(epics_name)
+    tdoff = cavity.get_tdoff()
     cavity_results = CavityResults(epics_name=epics_name, tdoff=tdoff)
 
     # TODO: Update procedure based on Rama's guidance
@@ -341,15 +388,16 @@ def run_cavity_job(epics_name, n_samples, timeout):
 
             # Wait until there is no trip
             start = datetime.now()
-            while not is_stable_running(epics_name):
+            while not cavity.is_stable_running():
                 time.sleep(1)
                 if (datetime.now() - start).total_seconds() > timeout:
                     raise RuntimeError(f"{epics_name}: {start.strftime('%Y-%m-%d %H:%M:%S')} "
                                        "sample timed out waiting for stable running")
 
             # Get the detune angle and reflected power waveforms
-            deta = epics.caget(f"{epics_name}WFSDETA2")
-            crfp = epics.caget(f"{epics_name}WFSCRFP")
+            #deta = epics.caget(f"{epics_name}WFSDETA2")
+            #crfp = epics.caget(f"{epics_name}WFSCRFP")
+            deta, crfp = cavity.get_waveforms()
             time_string = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-5]
 
             # Check again.  If we're not still in stable operations, then we probably have
@@ -402,17 +450,10 @@ def process_cavities(cavities, n_samples, timeout):
         try:
             results = future.result()
         except Exception as exc:
-            print(repr(exc))
-            results = CavityResults(epics_name=futures[future])
+            results = CavityResults(epics_name=futures[future], tdoff=math.nan)
             results.append_result(tdoff_error=math.nan,
                                   coefs=np.array([math.nan, math.nan, math.nan]),
-                                  img_buf=None, error_message=f"{repr(exc)}")
-            #print(f"Cavity: {epics_name}")
-            #print(f"Min CRFP DETA2 value: {tdoff_error}")
-            #print(f"Coeficients: {coefs}")
-            #print(f"Img: {im}")
-            # plt.imshow(mpimg.imread(img))
-            # plt.show()
+                                  img_buf=None, error_message=f"ALL FAILED: {repr(exc)}")
 
         rs.add_cavity_results(results)
 
