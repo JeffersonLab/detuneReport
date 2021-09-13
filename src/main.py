@@ -6,7 +6,7 @@ import concurrent.futures
 
 from analysis import run_cavity_job
 from email_sender import EmailSender
-from results import CavityResults, ResultSet
+from results import CavityResults, ResultSet, ResultTextFormatter
 
 
 def process_cavities(cavities, n_samples, timeout):
@@ -77,7 +77,8 @@ def main():
                              toaddrs=args.email)
         e_mail.send_html_email(rs=result_set)
     if not args.quiet:
-        print(result_set.to_table_string())
+        formatter = ResultTextFormatter()
+        print(formatter.format(result_set))
 
 
 if __name__ == "__main__":
