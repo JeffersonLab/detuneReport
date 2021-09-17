@@ -50,9 +50,9 @@ def main():
     parser.add_argument("-e", "--email", type=str, nargs='+',
                         help="Space separated list of email addresses to report")
     parser.add_argument("-q", "--quiet", action='store_true', help="Suppresses text output")
-    parser.add_argument("-n", "--n-samples", type=int, nargs=1, default=1,
+    parser.add_argument("-n", "--n-samples", type=int, default=1,
                         help="Number of samples to collect per cavity")
-    parser.add_argument("-t", "--timeout", type=float, nargs=1, default=20,
+    parser.add_argument("-t", "--timeout", type=float, default=20,
                         help="How long each sample should wait for stable operations.")
     parser.add_argument("-v", "--version", action='version', version='%(prog)s ' + __version__)
 
@@ -71,8 +71,8 @@ def main():
         raise ValueError("Cavity or Zone must be supplied to CLI.")
 
     # Go get the data and analyze it
-    result_set = process_cavities(cavities, n_samples=args.n_samples[0],
-                                  timeout=args.timeout[0])
+    result_set = process_cavities(cavities, n_samples=args.n_samples,
+                                  timeout=args.timeout)
 
     if args.email is not None:
         e_mail = EmailSender(subject="Detune Error Report", fromaddr=os.getlogin(),
