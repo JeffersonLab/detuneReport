@@ -18,65 +18,58 @@ def run_cavity_job(epics_name, n_samples, timeout):
         warnings.simplefilter("error")
 
         # Create a cavity object for interacting with this cavity
-        cavity = Cavity(epics_name=epics_name)
+        cavity = Cavity.get_cavity(epics_name=epics_name)
 
         # Setup for storing multiple samples' results
         tdoff = cavity.get_tdoff()
         cavity_results = CavityResults(epics_name=epics_name, tdoff=tdoff)
 
-        # TODO: Update procedure based on Rama's guidance
-        for i in range(n_samples):
-            # Initialize the values in case of exception
-            tdoff_error = math.nan
-            coef = []
-            img_buf = None
-            error = ""
+        with cavity.scope_mode():
+            for i in range(n_samples):
+                # Initialize the values in case of exception
+                tdoff_error = math.nan
+                coef = []
+                img_buf = None
+                error = ""
 
-            try:
-                # Wait until there is no trip
-                start = datetime.now()
-                while not cavity.is_stable_running():
-                    time.sleep(1)
-                    if (datetime.now() - start).total_seconds() > timeout:
-                        raise RuntimeError(f"{epics_name}: {start.strftime('%Y-%m-%d %H:%M:%S')} "
-                                           "sample timed out waiting for stable running")
-
-                # Get the detune angle and reflected power waveforms
-                # deta = epics.caget(f"{epics_name}WFSDETA2")
-                # crfp = epics.caget(f"{epics_name}WFSCRFP")
-                deta, crfp = cavity.get_waveforms()
-                time_string = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-5]
-
-                # Check again.  If we're not still in stable operations, then we probably have
-                # a problem in the data just collected.
-                if not cavity.is_stable_running():
-                    raise RuntimeError("Trip occurred during data collection")
-
-                # Calculate the second order fit of these
-                X = np.tan(np.radians(deta))
-                coef = np.polynomial.polynomial.polyfit(X, crfp, deg=2)
-
-                # Find the argmin of CRFP - i.e., the detune angle producing the lowest
-                # reflected power.
                 try:
-                    tdoff_error = np.degrees(np.arctan(get_quadratic_min(coef)))
+                    # Wait until there is no trip
+                    start = datetime.now()
+                    while not cavity.is_stable_running():
+                        time.sleep(1)
+                        if (datetime.now() - start).total_seconds() > timeout:
+                            raise RuntimeError(f"{epics_name}: {start.strftime('%Y-%m-%d %H:%M:%S')} "
+                                               "sample timed out waiting for stable running")
+
+                    # Get the detune angle and reflected power waveforms.  This waits for the data to be ready.
+                    deta, crfp = cavity.get_waveforms()
+                    time_string = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-5]
+
+                    # Check again.  If we're not still in stable operations, then we probably have
+                    # a problem in the data just collected.
+                    if not cavity.is_stable_running():
+                        raise RuntimeError("Trip occurred during data collection")
+
+                    # Calculate the second order fit of these
+                    X = np.tan(np.radians(deta))
+                    coef = np.polynomial.polynomial.polyfit(X, crfp, deg=2)
+
+                    # Find the argmin of CRFP - i.e., the detune angle producing the lowest
+                    # reflected power.
+                    try:
+                        tdoff_error = np.degrees(np.arctan(get_quadratic_min(coef)))
+                    except Exception as exc:
+                        error += repr(exc)
+                        tdoff_error = math.nan
+
+                    # Save a plot of the data and the fit
+                    img_buf = get_plot_img(deta, crfp, coef, tdoff_error, epics_name, time_string)
+
                 except Exception as exc:
                     error += repr(exc)
-                    tdoff_error = math.nan
 
-                # Save a plot of the data and the fit
-                img_buf = get_plot_img(deta, crfp, coef, tdoff_error, epics_name, time_string)
-
-            except Exception as exc:
-                error += repr(exc)
-
-            # Collect the results
-            cavity_results.append_result(tdoff_error, coef, img_buf, error)
-
-            # TODO: Update based on scope delay or sample rate or something.
-            # Sleep so new data has time to accrue
-            if i < n_samples - 1:
-                time.sleep(2)
+                # Collect the results
+                cavity_results.append_result(tdoff_error, coef, img_buf, error)
 
     return cavity_results
 
