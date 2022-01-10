@@ -240,12 +240,12 @@ class C100Cavity(Cavity):
 
         self._wait_for_pvs_to_connect()
 
-        # if not self.scope_setting.write_access:
-        #     raise ChannelAccessException(f"User lacks write permission for {self.scope_setting.pvname}")
-        # if not self.harvester_setting.write_access:
-        #     raise ChannelAccessException(f"User lacks write permission for {self.harvester_setting.pvname}")
-        # if not self.sample_rate.write_access:
-        #     raise ChannelAccessException(f"User lacks write permission for {self.sample_rate.pvname}")
+        if not self.scope_setting.write_access:
+            raise ChannelAccessException(f"User lacks write permission for {self.scope_setting.pvname}")
+        if not self.harvester_setting.write_access:
+            raise ChannelAccessException(f"User lacks write permission for {self.harvester_setting.pvname}")
+        if not self.sample_rate.write_access:
+            raise ChannelAccessException(f"User lacks write permission for {self.sample_rate.pvname}")
 
 
     @contextmanager
@@ -304,10 +304,10 @@ class C75Cavity(Cavity):
         self.pvs.append(self.sample_rate)
         self._wait_for_pvs_to_connect()
 
-        # if not self.scope_setting.write_access:
-        #     raise ChannelAccessException(f"User lacks write permission for {self.scope_setting.pvname}")
-        # if not self.sample_rate.write_access:
-        #     raise ChannelAccessException(f"User lacks write permission for {self.sample_rate.pvname}")
+        if not self.scope_setting.write_access:
+            raise ChannelAccessException(f"User lacks write permission for {self.scope_setting.pvname}")
+        if not self.sample_rate.write_access:
+            raise ChannelAccessException(f"User lacks write permission for {self.sample_rate.pvname}")
 
 
     @contextmanager
