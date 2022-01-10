@@ -1,11 +1,14 @@
 import os
 import math
+from typing import List
+
 import numpy as np
 import argparse
 import concurrent.futures
 
 from _version import __version__
 from analysis import run_cavity_job
+from ced import CED
 from email_sender import EmailSender
 from results import CavityResults, ResultSet, ResultTextFormatter
 
@@ -14,24 +17,29 @@ def process_cavities(cavities, n_samples, timeout):
     """Run TDOFF analysis for the specified cavities."""
     rs = ResultSet()
 
-    with concurrent.futures.ProcessPoolExecutor(max_workers=8) as executor:
-        # Use submit to leverage Future interface.  Creates a dictionary
-        # of Future objects mapped to cavity epics names.
-        futures = {}
-        for cavity in cavities:
-            futures[executor.submit(run_cavity_job, cavity, n_samples=n_samples,
-                                    timeout=timeout)] = cavity
+    try:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=8) as executor:
+            # Use submit to leverage Future interface.  Creates a dictionary
+            # of Future objects mapped to cavity epics names.
+            futures = {}
+            for epics_name in cavities.keys():
+                cav_type = cavities[epics_name]
+                futures[executor.submit(run_cavity_job, epics_name, cav_type, n_samples=n_samples,
+                                        timeout=timeout)] = epics_name
 
-    for future in concurrent.futures.as_completed(futures):
-        try:
-            results = future.result()
-        except Exception as exc:
-            results = CavityResults(epics_name=futures[future], tdoff=math.nan)
-            results.append_result(tdoff_error=math.nan,
-                                  coefs=np.array([math.nan, math.nan, math.nan]),
-                                  img_buf=None, error_message=f"ALL FAILED: {repr(exc)}")
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                results = future.result()
+            except Exception as exc:
+                results = CavityResults(epics_name=futures[future], tdoff=math.nan)
+                results.append_result(tdoff_error=math.nan,
+                                      coefs=np.array([math.nan, math.nan, math.nan]),
+                                      img_buf=None, error_message=f"ALL FAILED: {repr(exc)}")
 
-        rs.add_cavity_results(results)
+            rs.add_cavity_results(results)
+
+    except Exception as exc:
+        print(exc)
 
     return rs
 
@@ -47,6 +55,8 @@ def main():
                        help="EPICS name of a zone to check.  E.g. R1M")
     group.add_argument("-c", "--cavity", type=str, nargs=1,
                        help="EPICS name of cavity to check.  E.g., R1M1")
+    parser.add_argument("--cavity-type", type=str,
+                        help="Manually specify the cavity type.  By default, query CED.  E.g., 'C75' or 'C100'")
     parser.add_argument("-e", "--email", type=str, nargs='+',
                         help="Space separated list of email addresses to report")
     parser.add_argument("-q", "--quiet", action='store_true', help="Suppresses text output")
@@ -64,11 +74,20 @@ def main():
         exit(1)
 
     if args.cavity is not None:
-        cavities = args.cavity
+        cavity_names = args.cavity
     elif args.zone is not None:
-        cavities = [f"{args.zone[0]}{i}" for i in range(1, 9)]
+        cavity_names = [f"{args.zone[0]}{i}" for i in range(1, 9)]
     else:
         raise ValueError("Cavity or Zone must be supplied to CLI.")
+
+    # Construct the cavities dictionary.  Matches epics_name to cavity type.
+    if args.cavity_type is None:
+        ced = CED()
+        cavities = get_ced_cavities(cavity_names, ced=ced)
+    else:
+        cavities = {}
+        for e_name in cavity_names:
+            cavities[e_name] = args.cavity_type
 
     # Go get the data and analyze it
     result_set = process_cavities(cavities, n_samples=args.n_samples,
@@ -81,6 +100,28 @@ def main():
     if not args.quiet:
         formatter = ResultTextFormatter()
         print(formatter.format(result_set))
+
+
+def get_ced_cavities(epics_names: List[str], ced: CED):
+    properties = ['EPICSName', 'CavityType']
+    elements = ced.query_inventory(element_type='CryoCavity', properties=properties)
+    cavities = {}
+    missing = []
+    for e_name in epics_names:
+        found = False
+        for e in elements:
+            if e['properties']['EPICSName'] == e_name:
+                cavities[e_name] = e['properties']['CavityType']
+                found = True
+                break
+
+        if not found:
+            missing.append(e_name)
+
+    if len(missing) > 0:
+        raise ValueError(f"CED lookup failed for {missing}.")
+
+    return cavities
 
 
 if __name__ == "__main__":
