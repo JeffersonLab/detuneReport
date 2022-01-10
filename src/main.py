@@ -64,6 +64,8 @@ def main():
                         help="Number of samples to collect per cavity")
     parser.add_argument("-t", "--timeout", type=float, default=20,
                         help="How long each sample should wait for stable operations.")
+    parser.add_argument("-m", "--min-error", type=float, default=0,
+                        help="Minimum detune offset error to produce output.  -1 to always alert.")
     parser.add_argument("-v", "--version", action='version', version='%(prog)s ' + __version__)
 
     args = parser.parse_args()
@@ -92,6 +94,10 @@ def main():
     # Go get the data and analyze it
     result_set = process_cavities(cavities, n_samples=args.n_samples,
                                   timeout=args.timeout)
+
+    # Short circuit here if no cavity had a significant error.  Otherwise, process the results and output.
+    if args.min_error > result_set.get_max_average_tdoff_error():
+        return
 
     if args.email is not None:
         e_mail = EmailSender(subject="Detune Error Report", fromaddr=os.getlogin(),

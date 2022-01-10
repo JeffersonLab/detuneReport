@@ -55,6 +55,15 @@ class ResultSet:
 
         return avg, std, n_success
 
+    def get_max_average_tdoff_error(self):
+        """Find the max mean absolute error for a cavity in the ResultSet."""
+        max_e = -1
+        for name in self.tdoff_errors.keys():
+            # Only try to update if we have at least one valid error estimate.
+            if np.count_nonzero(~np.isnan(self.tdoff_errors[name])) > 0:
+                max_e = max(np.abs(np.nanmean(self.tdoff_errors[name])), max_e)
+
+        return max_e
 
 class ResultFormatter:
     """Base class for formatting ResultSet data."""
