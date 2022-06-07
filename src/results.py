@@ -4,6 +4,12 @@ import numpy as np
 import math
 
 
+class ResultsException(Exception):
+    """Exception class for identifying result-related errors."""
+    def __init__(self, message):
+        super().__init__(message)
+
+
 class CavityResults:
     """A class for holding the results of analyzing a cavity.  Just a light wrapper."""
 
@@ -57,11 +63,19 @@ class ResultSet:
 
     def get_max_average_tdoff_error(self):
         """Find the max mean absolute error for a cavity in the ResultSet."""
+
+        # Track the maximum found error.  Make sure we have at least one valid
+        # measurement
         max_e = -1
+        one_valid = False
         for name in self.tdoff_errors.keys():
             # Only try to update if we have at least one valid error estimate.
             if np.count_nonzero(~np.isnan(self.tdoff_errors[name])) > 0:
                 max_e = max(np.abs(np.nanmean(self.tdoff_errors[name])), max_e)
+                one_valid = True
+
+        if not one_valid:
+            raise ResultsException("No valid measurements.")
 
         return max_e
 
