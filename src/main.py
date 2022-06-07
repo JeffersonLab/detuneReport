@@ -10,7 +10,7 @@ from _version import __version__
 from analysis import run_cavity_job
 from ced import CED
 from email_sender import EmailSender
-from results import CavityResults, ResultSet, ResultTextFormatter
+from results import CavityResults, ResultSet, ResultTextFormatter, ResultsException
 
 
 def process_cavities(cavities, n_samples, timeout):
@@ -96,8 +96,13 @@ def main():
                                   timeout=args.timeout)
 
     # Short circuit here if no cavity had a significant error.  Otherwise, process the results and output.
-    if args.min_error > result_set.get_max_average_tdoff_error():
-        return
+    try:
+        max_error = result_set.get_max_average_tdoff_error()
+        if args.min_error > max_error:
+            return
+    except ResultsException as exc:
+        # Let the program continue.  More information will be given in the report.
+        print(f"ERROR: {exc}")
 
     if args.email is not None:
         e_mail = EmailSender(subject="Detune Error Report", fromaddr=os.getlogin(),
