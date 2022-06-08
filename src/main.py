@@ -13,7 +13,7 @@ from email_sender import EmailSender
 from results import CavityResults, ResultSet, ResultTextFormatter, ResultsException
 
 
-def process_cavities(cavities, n_samples, timeout):
+def process_cavities(cavities, n_samples, timeout, force_periodic):
     """Run TDOFF analysis for the specified cavities."""
     rs = ResultSet()
 
@@ -25,7 +25,7 @@ def process_cavities(cavities, n_samples, timeout):
             for epics_name in cavities.keys():
                 cav_type = cavities[epics_name]
                 futures[executor.submit(run_cavity_job, epics_name, cav_type, n_samples=n_samples,
-                                        timeout=timeout)] = epics_name
+                                        timeout=timeout, force_periodic=force_periodic)] = epics_name
 
         for future in concurrent.futures.as_completed(futures):
             try:
@@ -64,6 +64,8 @@ def main():
                         help="Number of samples to collect per cavity")
     parser.add_argument("-t", "--timeout", type=float, default=20,
                         help="How long each sample should wait for stable operations.")
+    parser.add_argument("-f", "--force-periodic", action='store_true', default=False,
+                        help="Allow the program to interrupt any scope mode operation.")
     parser.add_argument("-m", "--min-error", type=float, default=0,
                         help="Minimum detune offset error to produce output.  -1 to always alert.")
     parser.add_argument("-v", "--version", action='version', version='%(prog)s ' + __version__)
@@ -92,8 +94,8 @@ def main():
             cavities[e_name] = args.cavity_type
 
     # Go get the data and analyze it
-    result_set = process_cavities(cavities, n_samples=args.n_samples,
-                                  timeout=args.timeout)
+    result_set = process_cavities(cavities, n_samples=args.n_samples,timeout=args.timeout,
+                                  force_periodic=args.force_periodic)
 
     # Short circuit here if no cavity had a significant error.  Otherwise, process the results and output.
     try:

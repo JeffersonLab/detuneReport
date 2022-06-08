@@ -11,7 +11,7 @@ from cavity import Cavity
 from results import CavityResults
 
 
-def run_cavity_job(epics_name, cavity_type, n_samples, timeout):
+def run_cavity_job(epics_name, cavity_type, n_samples, timeout, force_periodic):
 
     # We want all warnings to be raised as exceptions
     np.seterr(all='raise')
@@ -19,7 +19,7 @@ def run_cavity_job(epics_name, cavity_type, n_samples, timeout):
         warnings.simplefilter("error")
 
         # Create a cavity object for interacting with this cavity           
-        cavity = Cavity.get_cavity(epics_name=epics_name, cavity_type=cavity_type)
+        cavity = Cavity.get_cavity(epics_name=epics_name, cavity_type=cavity_type, force_periodic=force_periodic)
 
         # Setup for storing multiple samples' results
         tdoff = cavity.get_tdoff()
@@ -40,7 +40,7 @@ def run_cavity_job(epics_name, cavity_type, n_samples, timeout):
                         time.sleep(1)
                         if (datetime.now() - start).total_seconds() > timeout:
                             raise RuntimeError(f"{epics_name}: {start.strftime('%Y-%m-%d %H:%M:%S')} "
-                                            "sample timed out waiting for stable running")
+                                               "sample timed out waiting for stable running")
 
                     # Get the detune angle and reflected power waveforms.  This waits for the data to be ready.
                     deta, crfp = cavity.get_waveforms()
