@@ -1,7 +1,7 @@
 import time
 import epics
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from contextlib import contextmanager
 from epics.ca import ChannelAccessException
 
@@ -11,12 +11,16 @@ from ced import CED
 class Cavity:
 
     @classmethod
-    def get_cavity(cls, epics_name, cavity_type):
+    def get_cavity(cls, epics_name, cavity_type, force_periodic: bool = False) -> 'Cavity':
+        """Factory method for generating a cavity.  Optionally override safety checks on interrupting certain modes.
+
+        Note: force_periodic is only enabled/needed on certain cavity types.
+        """
         supported_types = ('C75', 'C100', 'P1R')
         if cavity_type in ('C75',):
             cavity = C75Cavity(epics_name)
         elif cavity_type in ('C100', 'P1R'):
-            cavity = C100Cavity(epics_name)
+            cavity = C100Cavity(epics_name, force_periodic=force_periodic)
         else:
             raise ValueError(f"{epics_name}: Unsupported cavity type '{cavity_type}'.  Supported types: "
                              f"{supported_types}.")
@@ -199,18 +203,40 @@ class Cavity:
             raise RuntimeError(f"Error retrieving PV value '{pv.pvname}")
         return value
 
+    @contextmanager
+    def scope_mode(self, mode=None):
+        raise NotImplementedError("This method must be implemented by sub classes")
+
 
 class C100Cavity(Cavity):
 
-    def __init__(self, epics_name):
+    def __init__(self, epics_name: str, force_periodic: bool):
         """Initialize a Cavity object and connect to it's PVs.  Exception raised if unable to connect."""
 
         super(C100Cavity, self).__init__(epics_name=epics_name)
+        self.force_periodic = force_periodic
 
         # Control the waveform mode.  Not sure why we have two separate PVs, but this is the API.
-        self.scope_setting = epics.PV(f"{epics_name}WFSCOPrun")  # 0 = No scope, 1 = stop, 2 = single, 3 = periodic
+        self.scope_setting = epics.PV(f"{epics_name}WFSCOPrun")
+        # Values/meanings for WFSCOPrun
+        # FCCVER >= 2021
+        # 0 = Scope not running (does nothing if caput),
+        # 1 = single,
+        # 2 = run,
+        # 3 = periodic,
+        # 73 = trigger stop (automatically transitions to 0),
+        # 74 = clear error bits (automatically transitions to 0 or 3)
+        #
+        # Otherwise,
+        # 0 = No scope,
+        # 1 = stop,
+        # 2 = single,
+        # 3 = periodic
+
         self.harvester_setting = epics.PV(f"{epics_name}WFTRIPrun")  # 0 = No harvester, 1 = harvester
         self.sample_rate = epics.PV(f"{epics_name}TRGS1")  # Sample interval in milliseconds
+        self.fcc_sw_version = epics.PV(f"{epics_name}FCCVER")  # The FCC software version, interface changes at 2021
+        self.scope_error = epics.PV(f"{epics_name}WFSCOPerr")  # Is the FCC scope system in an error state? (>0 == Yes)
 
         # This PV shows the progress of the sequencer associated with processing periodic data collection.
         # Info taken from EDM screen on 2021-10-25.  For periodic, we see 8, 64, 512, 2048, 4096, 8192, and 1024 (error)
@@ -229,14 +255,29 @@ class C100Cavity(Cavity):
         # 4096 - Reading all 17 buffers
         # 8192 - Done reading buffers (give back semaphore)
         # 16384 - Abort
+
+        # FCC Software Version (FCCVER) 2021 updated the sequencer to have a different meaning.  Info as of June 2022
+        # The two important values are
+        # 256 - Reading Data From the FPGA (Run 3 Read WFs).  THis is the start of updating waveform records
+        # 512 - Doing calculations on waveform records (Run 3 Calc).  The waveforms have been updated and are being used
+
+        if self.fcc_sw_version.get() < 2021:
+            seq_start_val = 2048
+            seq_end_val = 8192
+        else:
+            seq_start_val = 256
+            seq_end_val = 512
         self.scope_seq_step = epics.PV(f"{epics_name}WFSCOPstp", form='time',
-                                       callback=self._data_ready_cb(seq_start_val=2048, seq_end_val=8192))
+                                       callback=self._data_ready_cb(seq_start_val=seq_start_val,
+                                                                    seq_end_val=seq_end_val))
 
         # Track the PVs used.
+        self.pvs.append(self.fcc_sw_version)
         self.pvs.append(self.scope_seq_step)
         self.pvs.append(self.scope_setting)
         self.pvs.append(self.harvester_setting)
         self.pvs.append(self.sample_rate)
+        self.pvs.append(self.scope_error)
 
         self._wait_for_pvs_to_connect()
 
@@ -247,9 +288,17 @@ class C100Cavity(Cavity):
         if not self.sample_rate.write_access:
             raise ChannelAccessException(f"User lacks write permission for {self.sample_rate.pvname}")
 
-
     @contextmanager
     def scope_mode(self, mode=3):
+        if self.fcc_sw_version.get() >= 2021:
+            with self._scope_mode_fcc_ver_2021(mode=mode):
+                yield
+        else:
+            with self._scope_mode_orig(mode=mode):
+                yield
+
+    @contextmanager
+    def _scope_mode_orig(self, mode):
         """Allows convenient flip to scope mode via context manager.  Restores original values on exiting context."""
         # Cache the values so we can restore
         old_harvester = self.harvester_setting.get()
@@ -273,6 +322,39 @@ class C100Cavity(Cavity):
             # When that context exits, we put it back in harvester mode.  Even if there was an exception.
             self.scope_setting.put(old_scope, wait=True)
             self.harvester_setting.put(old_harvester, wait=True)
+
+    @contextmanager
+    def _scope_mode_fcc_ver_2021(self, mode):
+        """This method handles changing to 'PERIODIC' scope mode (3) from 'STOP' mode (0)."""
+        old_scope = self.scope_setting.get()
+
+        try:
+            if old_scope not in (0, 3) and not self.force_periodic:
+                raise RuntimeError("Can't flip to periodic mode from other operational modes with force option set.")
+            if old_scope == 3:
+                if mode == 0:
+                    self.scope_setting.put(0, wait=True)
+            elif old_scope == 0:
+                if mode == 3:
+                    # Check for and clear errors
+                    if self.scope_error.value > 0:
+                        # Mode 74 clears all errors.  After clearing errors, the sequencer moves to back to state 0.
+                        self.scope_setting.put(74, wait=True)
+                        timeout = datetime.now() + timedelta(seconds=1)
+                        while True:
+                            time.sleep(0.01)
+                            if self.scope_setting.get() == 0:
+                                break
+                            if datetime.now() > timeout:
+                                raise RuntimeError("Timed out waiting for sequencer to return to 'STOP' (0) after "
+                                                   "clearing errors.")
+                    self.scope_setting.put(mode)
+
+            # yield control to the body of the context manager.
+            yield
+
+        finally:
+            self.scope_setting.put(old_scope, wait=True)
 
 
 class C75Cavity(Cavity):
