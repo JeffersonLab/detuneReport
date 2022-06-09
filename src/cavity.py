@@ -261,15 +261,7 @@ class C100Cavity(Cavity):
         # 256 - Reading Data From the FPGA (Run 3 Read WFs).  THis is the start of updating waveform records
         # 512 - Doing calculations on waveform records (Run 3 Calc).  The waveforms have been updated and are being used
 
-        if self.fcc_sw_version.get() < 2021:
-            seq_start_val = 2048
-            seq_end_val = 8192
-        else:
-            seq_start_val = 256
-            seq_end_val = 512
-        self.scope_seq_step = epics.PV(f"{epics_name}WFSCOPstp", form='time',
-                                       callback=self._data_ready_cb(seq_start_val=seq_start_val,
-                                                                    seq_end_val=seq_end_val))
+        self.scope_seq_step = epics.PV(f"{epics_name}WFSCOPstp", form='time')
 
         # Track the PVs used.
         self.pvs.append(self.fcc_sw_version)
@@ -280,6 +272,15 @@ class C100Cavity(Cavity):
         self.pvs.append(self.scope_error)
 
         self._wait_for_pvs_to_connect()
+
+	# Add this callback after the wait for connect since we have to read a PV.
+        if self.fcc_sw_version.get() < 2021:
+            seq_start_val = 2048
+            seq_end_val = 8192
+        else:
+            seq_start_val = 256
+            seq_end_val = 512
+        self.scope_seq_step.add_callback(self._data_ready_cb(seq_start_val=seq_start_val, seq_end_val=seq_end_val))
 
         if not self.scope_setting.write_access:
             raise ChannelAccessException(f"User lacks write permission for {self.scope_setting.pvname}")
